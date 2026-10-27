@@ -1,0 +1,95 @@
+# Publishes a release when a version tag like v0.3.0 is pushed: tests on the
+# oldest Go that go.mod allows and on the latest, checks that the tag is the
+# version tq --version prints, builds tq and tqmd for each platform with
+# scripts/dist.sh, and creates the GitHub release with the archives. Run by
+# hand, it tests and builds without publishing, and keeps the archives as an
+# artifact of the run.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (Go ${{ matrix.go-version || 'from go.mod' }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - go-version-file: go.mod
+          - go-version: stable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go-version }}
+          go-version-file: ${{ matrix.go-version-file }}
+          cache: false
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::not formatted with gofmt: $unformatted"
+            exit 1
+          fi
+      - run: go vet ./...
+      - run: go test ./...
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to create the release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+      - name: Check the tag
+        if: github.event_name == 'push'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^const version = "\(.*\)"$/\1/p' internal/cli/cli.go)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error file=internal/cli/cli.go::the tag is $TAG, but tq --version prints $version"
+            exit 1
+          fi
+      - name: Build
+        run: scripts/dist.sh
+      - name: Publish
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=${TAG#v}
+          cat >notes.md <<EOF
+          Download the archive for your system below and put \`tq\` and \`tqmd\` on your \`PATH\`. \`tq_${version}_checksums.txt\` has their SHA-256 sums.
+
+          Or, with Go:
+
+          \`\`\`sh
+          go install github.com/${GITHUB_REPOSITORY}@${TAG} github.com/${GITHUB_REPOSITORY}/cmd/tqmd@${TAG}
+          \`\`\`
+          EOF
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "tq $version" --notes-file notes.md --generate-notes \
+            dist/tq_"$version"_*
+      - name: Keep the archives
+        if: github.event_name != 'push'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error

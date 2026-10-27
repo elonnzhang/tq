@@ -82,3 +82,4 @@ To check the viewer (`go run . -i`, or `go run ./cmd/tqmd`) without a person at 
 - Doc comments are plain sentences about behavior, in the style of the Go standard library. Match their density and voice.
 - CLI tests run `cli.run` on given stdin and compare stdout, stderr and the exit code exactly, through the `tq(t, stdin, args...)` helper in `cli_test.go`. Render tests compare the drawn text exactly.
 - `internal/cli/testdata/herdr-agent-list.json` is sanitized. Don't replace it with real output that contains local paths.
+- Releases come from `.github/workflows/release.yml`, which runs on a pushed `v*` tag. The tag must match `version` in `internal/cli/cli.go`, or the workflow fails. The archives are built by `scripts/dist.sh`, which can be run locally and writes to `dist/`. Actions in the workflow are pinned to commit SHAs, with the version in a comment; keep them pinned when updating them.

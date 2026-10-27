@@ -204,3 +204,16 @@ go run . -S .pane_id '.result.agents | map({pane_id, agent})' internal/cli/testd
 ```
 
 `go run .` runs tq, and `go run ./cmd/tqmd` runs tqmd. [AGENTS.md](AGENTS.md) describes how the code is laid out.
+
+### Releasing
+
+1. Set `version` in `internal/cli/cli.go` to the new version, say `0.3.0`, and commit it.
+2. Tag the commit and push the tag:
+
+   ```sh
+   git tag -a v0.3.0 -m "tq 0.3.0" && git push origin v0.3.0
+   ```
+
+The [release workflow](.github/workflows/release.yml) then tests tq on Go 1.26 and on the latest Go. It fails if the tag isn't the version tq prints. Otherwise it builds the archives with `scripts/dist.sh` and publishes the release.
+
+To try the build without publishing, run `scripts/dist.sh`, which writes the archives to `dist/`. Or run the workflow by hand from the Actions tab, or with `gh workflow run release.yml`: it then keeps the archives as an artifact of the run.
