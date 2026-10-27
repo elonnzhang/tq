@@ -1,5 +1,4 @@
 // Command tq is jq that prints tables for people to read instead of JSON.
-// With -i it shows them in a full-screen viewer instead.
 package main
 
 import (

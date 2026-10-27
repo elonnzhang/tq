@@ -17,7 +17,9 @@ Filters are jq's, run by [gojq](https://github.com/itchyny/gojq). The command li
 
 ## Install
 
-You need Go 1.27.2 or later. Install `tq` and `tqmd` with:
+Download the archive for your system from the [releases](https://github.com/elonnzhang/tq/releases), and put `tq` and `tqmd` from it somewhere on your `PATH`. There are builds for macOS, Linux and Windows, on amd64 and arm64.
+
+With Go 1.26 or later, you can install them from source instead:
 
 ```sh
 go install github.com/elonnzhang/tq@latest github.com/elonnzhang/tq/cmd/tqmd@latest

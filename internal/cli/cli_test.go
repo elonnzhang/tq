@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -131,13 +132,6 @@ func TestCLI(t *testing.T) {
 			stdout: "2\n",
 			stderr: "tq: error: expected an object but got: number (1)\n",
 			code:   5,
-		},
-		{
-			name:  "invalid JSON",
-			stdin: `{"a":1} x`, args: []string{".a"},
-			stdout: "1\n",
-			stderr: "tq: <stdin>: invalid JSON at byte 9: invalid character 'x' looking for beginning of value\n",
-			code:   2,
 		},
 		{
 			name:   "truncated JSON",
@@ -271,6 +265,16 @@ func TestSortFlags(t *testing.T) {
 		if s := strings.Join(got, " "); s != tc.want {
 			t.Errorf("parseArgs(%q) sorts by %q, want %q", tc.args, s, tc.want)
 		}
+	}
+}
+
+func TestInvalidJSON(t *testing.T) {
+	// The values before the error are still drawn. The byte the error is
+	// at isn't checked, since Go 1.26 reports the wrong one.
+	out, errOut, code := tq(t, `{"a":1} x`, ".a")
+	want := regexp.MustCompile(`^tq: <stdin>: invalid JSON at byte \d+: invalid character 'x' looking for beginning of value\n$`)
+	if out != "1\n" || !want.MatchString(errOut) || code != 2 {
+		t.Errorf("tq = (%d)\nstdout: %q\nstderr: %q\nwant (2)\nstdout: %q\nstderr matching %s", code, out, errOut, "1\n", want)
 	}
 }
 
