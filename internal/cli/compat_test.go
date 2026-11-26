@@ -148,7 +148,7 @@ func (readFailure) Read([]byte) (int, error) {
 }
 
 func TestInputHaltDoesNotReadAhead(t *testing.T) {
-	for _, value := range []string{`{}`, `[]`, `"text"`, "\n\t {}", "1 ", "true ", "false ", "null "} {
+	for _, value := range []string{`{}`, `[]`, `"text" `, "\n\t {}", "1 ", "true ", "false ", "null "} {
 		t.Run(value, func(t *testing.T) {
 			var out, errOut strings.Builder
 			c := &cli{
