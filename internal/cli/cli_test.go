@@ -131,13 +131,13 @@ func TestCLI(t *testing.T) {
 			stdin: `1 {"a":2}`, args: []string{".a"},
 			stdout: "2\n",
 			stderr: "tq: error: expected an object but got: number (1)\n",
-			code:   5,
+			code:   0,
 		},
 		{
 			name:   "truncated JSON",
 			stdin:  `{"a":`,
 			stderr: "tq: <stdin>: invalid JSON: unexpected end of input\n",
-			code:   2,
+			code:   5,
 		},
 		{
 			name:   "missing file",
@@ -273,8 +273,8 @@ func TestInvalidJSON(t *testing.T) {
 	// at isn't checked, since Go 1.26 reports the wrong one.
 	out, errOut, code := tq(t, `{"a":1} x`, ".a")
 	want := regexp.MustCompile(`^tq: <stdin>: invalid JSON at byte \d+: invalid character 'x' looking for beginning of value\n$`)
-	if out != "1\n" || !want.MatchString(errOut) || code != 2 {
-		t.Errorf("tq = (%d)\nstdout: %q\nstderr: %q\nwant (2)\nstdout: %q\nstderr matching %s", code, out, errOut, "1\n", want)
+	if out != "1\n" || !want.MatchString(errOut) || code != 5 {
+		t.Errorf("tq = (%d)\nstdout: %q\nstderr: %q\nwant (5)\nstdout: %q\nstderr matching %s", code, out, errOut, "1\n", want)
 	}
 }
 

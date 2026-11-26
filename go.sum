@@ -20,6 +20,8 @@ github.com/clipperhouse/displaywidth v0.11.0 h1:lBc6kY44VFw+TDx4I8opi/EtL9m20WSE
 github.com/clipperhouse/displaywidth v0.11.0/go.mod h1:bkrFNkf81G8HyVqmKGxsPufD3JhNl3dSqnGhOoSD/o0=
 github.com/clipperhouse/uax29/v2 v2.7.0 h1:+gs4oBZ2gPfVrKPthwbMzWZDaAFPGYK72F0NJv2v7Vk=
 github.com/clipperhouse/uax29/v2 v2.7.0/go.mod h1:EFJ2TJMRUaplDxHKj1qAEhCtQPW2tJSwu5BF98AuoVM=
+github.com/dlclark/regexp2/v2 v2.13.2 h1:8vXJIqwqJRYqTHVl/DNQW8FPGNpkTn1aPrx2HZondsQ=
+github.com/dlclark/regexp2/v2 v2.13.2/go.mod h1:avUrQvPaLz2DrFNHJF0taWAFFX2C1GMSSoeiqFjcBmU=
 github.com/itchyny/gojq v0.12.19 h1:ttXA0XCLEMoaLOz5lSeFOZ6u6Q3QxmG46vfgI4O0DEs=
 github.com/itchyny/gojq v0.12.19/go.mod h1:5galtVPDywX8SPSOrqjGxkBeDhSxEW1gSxoy7tn1iZY=
 github.com/itchyny/timefmt-go v0.1.8 h1:1YEo1JvfXeAHKdjelbYr/uCuhkybaHCeTkH8Bo791OI=

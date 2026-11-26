@@ -40,10 +40,12 @@ To check the viewer (`go run . -i`, or `go run ./cmd/tqmd`) without a person at 
    The help text is `usage()` in the same file. Update it with every change to the options, keeping lines under 80 columns.
 2. **Rank the filter's keys.** The filter is parsed with gojq, and `keyOrder.addQueryKeys` (`order.go`) ranks the object keys the filter writes, in the order written.
 3. **Read the inputs.** `inputs` (`input.go`) decodes the JSON stream with `UseNumber`. Gojq keeps objects as Go maps, which lose key order, so `inputs` records the key order of every object it reads.
+   - `--input auto` detects whitespace-separated text tables through `texttable.go`; `--input json` disables detection, and `--input table` forces it. A headed table becomes an array of objects, a headerless table an array of arrays; all fields stay strings. `-R` bypasses detection and reads raw lines, or one whole string with `-Rs`.
    - Display order of keys: the filter's keys, then input order, then sorted.
    - Numbers reach later code as `json.Number`, or as `int`, `float64` or `*big.Int` from gojq arithmetic. Code that handles numbers must accept all four.
 4. **Run the filter on each input.** Results are collected. One result is drawn as itself; several are drawn as one array. A runtime error is reported and the run goes on with the next input, as in jq.
-   - Exit codes follow jq: 2 for usage or input errors, 3 when the filter doesn't compile, 5 for runtime errors.
+   - Exit codes follow jq: 2 for usage or file errors, 3 when the filter doesn't compile, 5 for JSON parse errors or a runtime error on the last input. A later successful input resets runtime status; missing files still leave status 2. JSON parse errors stop input. `-e` returns 1 for a final false or null and 4 for no results.
+   - `builtins.go` supplies `keys_unsorted` and ordered `to_entries`; `regexp.go` supplies regex functions through regexp2, with bounded backtracking. Large integers keep gojq's precision.
 5. **Apply `--sort`/`-S`** (`sort.go`). It works on a deep copy of the results, because gojq slices share their backing arrays. Keys are applied last first, with a stable sort, so that earlier keys win ties.
 6. **Draw.** The output goes through one of:
    - `render.Render` for tables;

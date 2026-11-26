@@ -18,14 +18,15 @@ import (
 	"github.com/elonnzhang/tq/render"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 // Exit codes, as in jq.
 const (
 	exitOK      = 0
-	exitInput   = 2 // usage, file and JSON parse errors
+	exitInput   = 2 // usage and file errors
 	exitCompile = 3 // the filter doesn't compile
-	exitRuntime = 5 // the filter failed on some input
+	exitNoValue = 4 // no results with --exit-status
+	exitRuntime = 5 // JSON parse or filter errors
 )
 
 // Output formats.
@@ -100,7 +101,7 @@ func (c *cli) run(args []string) int {
 	case opts.version:
 		fmt.Fprintln(c.stdout, c.name, version)
 		return exitOK
-	case opts.filter == "" && len(opts.files) == 0 && c.stdinTTY && !opts.nullInput:
+	case opts.filter == "" && len(opts.files) == 0 && c.stdinTTY && !opts.nullInput && !opts.fromFile:
 		// Nothing to read but a terminal: the user probably wants help.
 		fmt.Fprint(c.stderr, usage(c.name, c.format, c.mode))
 		return exitInput
@@ -116,7 +117,17 @@ func (c *cli) run(args []string) int {
 	if !slices.Contains(formats, format) {
 		return c.usageError(fmt.Errorf("unknown output format: %q", format))
 	}
-	if opts.filter == "" {
+	if opts.fromFile {
+		if opts.filter == "" {
+			return c.usageError(fmt.Errorf("--from-file needs a file"))
+		}
+		data, err := os.ReadFile(opts.filter)
+		if err != nil {
+			c.errorf("%v", err)
+			return exitInput
+		}
+		opts.filter = string(data)
+	} else if opts.filter == "" {
 		opts.filter = "."
 	}
 	interact := c.mode == Interactive
@@ -131,17 +142,32 @@ func (c *cli) run(args []string) int {
 	}
 	order := newKeyOrder()
 	order.addQueryKeys(query)
+	addOrderedBuiltins(query)
 	in := newInputs(opts.files, c.stdin, order)
+	in.format = opts.input
+	in.raw = opts.rawInput
+	in.rawSlurp = opts.rawInput && opts.slurp
+	defer in.close()
 	var iter gojq.Iter = in
 	if opts.slurp {
-		iter = slurp(in)
+		if opts.rawInput {
+			iter = slurpRaw(in)
+		} else {
+			iter = slurp(in)
+		}
 	}
 	names := append(opts.names, "$ARGS")
-	values := append(opts.values, map[string]any{"named": opts.named, "positional": []any{}})
+	positional := opts.positional
+	if positional == nil {
+		positional = []any{}
+	}
+	values := append(opts.values, map[string]any{"named": opts.named, "positional": positional})
 	code, err := gojq.Compile(query,
 		gojq.WithVariables(names),
 		gojq.WithEnvironLoader(c.environ),
 		gojq.WithInputIter(iter),
+		orderedKeysOption(order),
+		regexpOption(),
 	)
 	if err != nil {
 		c.errorf("invalid filter: %v", err)
@@ -150,7 +176,9 @@ func (c *cli) run(args []string) int {
 
 	var results []any
 	status := exitOK
+	valueStatus := exitNoValue
 	runOn := func(v any) (halted bool) {
+		status = exitOK
 		out := code.Run(v, values...)
 		for {
 			v, ok := out.Next()
@@ -158,8 +186,7 @@ func (c *cli) run(args []string) int {
 				return false
 			}
 			if err, ok := v.(error); ok {
-				var halt *gojq.HaltError
-				if errors.As(err, &halt) {
+				if halt, ok := errors.AsType[*gojq.HaltError](err); ok {
 					status = c.halt(halt)
 					return true
 				}
@@ -168,10 +195,15 @@ func (c *cli) run(args []string) int {
 				return false // jq goes on with the next input
 			}
 			results = append(results, v)
+			valueStatus = exitOK
+			if v == nil || v == false {
+				valueStatus = 1
+			}
 		}
 	}
+	halted := false
 	if opts.nullInput {
-		runOn(nil)
+		halted = runOn(nil)
 	} else {
 		for {
 			v, ok := iter.Next()
@@ -180,15 +212,20 @@ func (c *cli) run(args []string) int {
 			}
 			if err, ok := v.(error); ok {
 				c.errorf("%v", err)
+				status = in.failure
 				continue
 			}
 			if runOn(v) {
+				halted = true
 				break
 			}
 		}
 	}
-	if in.failed && status == exitOK {
+	if in.failure == exitInput && status == exitOK && !halted {
 		status = exitInput
+	}
+	if opts.exitStatus && status == exitOK && !halted {
+		status = valueStatus
 	}
 
 	if len(results) > 0 {
@@ -281,32 +318,48 @@ func (c *cli) usageError(err error) int {
 	return exitInput
 }
 
-// slurped yields all the values of an iterator in one array, or the first
-// error it meets. It reads nothing until asked, so that -ns doesn't wait
-// for stdin unless the filter calls input.
+// slurped collects input values, reporting missing files while continuing
+// to read and stopping on parse errors. It reads nothing until asked, so
+// -ns doesn't wait for stdin unless the filter calls input.
 type slurped struct {
 	iter gojq.Iter
 	done bool
+	raw  bool
+	all  []any
+	text strings.Builder
 }
 
 func slurp(iter gojq.Iter) gojq.Iter {
-	return &slurped{iter: iter}
+	return &slurped{iter: iter, all: []any{}}
+}
+
+// slurpRaw joins raw inputs without adding line breaks between files.
+func slurpRaw(iter gojq.Iter) gojq.Iter {
+	return &slurped{iter: iter, raw: true}
 }
 
 func (s *slurped) Next() (any, bool) {
 	if s.done {
 		return nil, false
 	}
-	s.done = true
-	all := []any{}
 	for {
 		v, ok := s.iter.Next()
 		if !ok {
-			return all, true
+			s.done = true
+			if s.raw {
+				return s.text.String(), true
+			}
+			return s.all, true
 		}
 		if _, ok := v.(error); ok {
+			in, isInput := s.iter.(*inputs)
+			s.done = !isInput || in.failure != exitInput
 			return v, true
 		}
-		all = append(all, v)
+		if s.raw {
+			s.text.WriteString(v.(string))
+		} else {
+			s.all = append(s.all, v)
+		}
 	}
 }

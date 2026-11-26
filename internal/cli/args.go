@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/itchyny/gojq"
 )
 
 // usage returns the help for the command named name, which shows output in
@@ -18,8 +20,12 @@ func usage(name, format string, mode Mode) string {
 	return fmt.Sprintf(`Usage: %[1]s [options] [filter] [file...]
 
 %[1]s is jq that prints tables or Markdown for people to read instead of
-JSON. It runs the jq filter (default ".") on each JSON value read from the
-files, or stdin when there are none, and draws the results.
+JSON. It reads JSON or whitespace-separated text tables from files, or stdin
+when there are none, runs the jq filter (default "."), and draws the results.
+
+Text tables with uppercase headers become arrays of object rows; headerless
+tables become arrays of array rows. All fields stay strings. Detection is
+conservative; --input table forces ambiguous tables.
 
 Tables (-o table):
   object            a table of keys and values
@@ -52,6 +58,10 @@ Columns and sections appear in the order the filter writes them, then in
 input order.
 
 Options:
+      --input FORMAT       input format: auto, json, or table (default: auto)
+                           table forces ambiguous cases (two columns or
+                           numeric IDs); json disables detection
+                           -R takes precedence over this option
   -o, --output FORMAT      output format: table or md (default: %[2]s)
   -i, --interactive        show the output in a full-screen viewer that
                            scrolls both ways, with tables at full width
@@ -62,8 +72,13 @@ Options:
                            is a terminal; default: %[3]s)
       --no-interactive     write the output instead of showing the viewer
   -n, --null-input         use null as the single input value
+  -R, --raw-input          read each input line as a string instead of JSON
   -s, --slurp              read all inputs into an array and use it as the
-                           single input value
+                           single input value; with -R (-Rs), read one whole
+                           string, retaining line breaks
+  -e, --exit-status        0 for a truthy last result, 1 for false or null,
+                           4 when the filter produces no results
+  -f, --from-file FILE     read the filter from FILE
   -x, --expand             draw objects and arrays inside table rows as
                            nested tables instead of "- key: value" lines
   -w, --width N            keep lines at most N characters wide, counting
@@ -85,58 +100,84 @@ Options:
   -M, --monochrome-output  don't colorize output
       --arg NAME VALUE     set $NAME to the string VALUE
       --argjson NAME JSON  set $NAME to the JSON value
+      --args               collect positional arguments as strings in
+                           $ARGS.positional instead of reading files
+      --jsonargs           collect positional arguments as JSON values in
+                           $ARGS.positional instead of reading files
   -r, --raw-output         ignored; strings are always shown without quotes
   -h, --help               show this help
       --version            show the version
 
 Examples:
   herdr agent list | %[1]s
-  herdr agent list | %[1]s '.result.agents[] | {pane_id, agent, agent_status, cwd}'
+  herdr agent list | %[1]s '.result.agents[] | {pane_id, agent, cwd}'
   %[1]s -s 'map({name, size})' a.json b.json
 `, name, format, viewer)
 }
 
 // valued are the long options that take a value, which may be written
 // "--name=value".
-var valued = []string{"--width", "--style", "--output", "--sort"}
+var valued = []string{"--width", "--style", "--output", "--sort", "--from-file", "--input"}
 
 // shortValued are the short flags that take a value, which may be written
 // right after them in a cluster, as in "-w80".
-const shortValued = "woS"
+const shortValued = "woSf"
 
 // options are the parsed command line.
 type options struct {
-	filter    string
-	files     []string
-	output    string // empty means the command's default
-	nullInput bool
-	slurp     bool
-	expand    bool
-	interact  *bool // nil means the command's default
-	width     int   // -1 means the terminal width
-	style     string
-	color     *bool // nil means automatic
-	sorts     []sortKey
-	names     []string
-	values    []any
-	named     map[string]any // $ARGS.named
-	help      bool
-	version   bool
+	filter     string
+	files      []string
+	input      string // auto, json, or table; rawInput takes precedence
+	output     string // empty means the command's default
+	nullInput  bool
+	rawInput   bool
+	exitStatus bool
+	fromFile   bool // filter is a filename to be loaded by the caller
+	slurp      bool
+	expand     bool
+	interact   *bool // nil means the command's default
+	width      int   // -1 means the terminal width
+	style      string
+	color      *bool // nil means automatic
+	sorts      []sortKey
+	names      []string
+	values     []any
+	named      map[string]any // $ARGS.named
+	positional []any          // $ARGS.positional
+	help       bool
+	version    bool
 }
 
 // parseArgs parses the command line the way jq does: short flags may be
 // combined, options may come after the filter, and "--" ends them.
 func parseArgs(args []string) (*options, error) {
-	o := &options{width: -1, style: "rounded", named: map[string]any{}}
-	var positional []string
+	o := &options{input: "auto", width: -1, style: "rounded", named: map[string]any{}, positional: []any{}}
+	var filterSet bool
+	var positionalMode string
+	collect := func(arg string) error {
+		if !filterSet {
+			o.filter, filterSet = arg, true
+		} else if positionalMode == "" {
+			o.files = append(o.files, arg)
+		} else {
+			return o.addPositional(arg, positionalMode)
+		}
+		return nil
+	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
-			positional = append(positional, args[i+1:]...)
+			for _, arg := range args[i+1:] {
+				if err := collect(arg); err != nil {
+					return nil, err
+				}
+			}
 			break
 		}
 		if len(arg) < 2 || arg[0] != '-' {
-			positional = append(positional, arg)
+			if err := collect(arg); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		// take returns the next n arguments as the values of flag.
@@ -163,6 +204,14 @@ func parseArgs(args []string) (*options, error) {
 			if err := o.long(name, val, take); err != nil {
 				return nil, err
 			}
+			switch name {
+			case "--from-file":
+				if err := collect(val); err != nil {
+					return nil, err
+				}
+			case "--args", "--jsonargs":
+				positionalMode = name
+			}
 			continue
 		}
 		// A cluster of short flags like -ns or -w80.
@@ -170,23 +219,55 @@ func parseArgs(args []string) (*options, error) {
 			if err := o.short(arg[j], arg[j+1:], take); err != nil {
 				return nil, err
 			}
+			if arg[j] == 'f' {
+				file := arg[j+1:]
+				if file == "" {
+					file = args[i] // short consumed the next argument
+				}
+				if err := collect(file); err != nil {
+					return nil, err
+				}
+			}
 			if strings.IndexByte(shortValued, arg[j]) >= 0 {
 				break // the rest of the cluster was its value, if any
 			}
 		}
 	}
-	if len(positional) > 0 {
-		o.filter, o.files = positional[0], positional[1:]
-	}
 	return o, nil
+}
+
+func (o *options) addPositional(arg, mode string) error {
+	var v any = arg
+	if mode == "--jsonargs" {
+		var err error
+		if v, err = parseJSON(arg); err != nil {
+			return fmt.Errorf("--jsonargs: invalid JSON: %v", err)
+		}
+	}
+	o.positional = append(o.positional, v)
+	return nil
 }
 
 type taker func(flag string, n int) ([]string, error)
 
 func (o *options) long(name, val string, take taker) error {
 	switch name {
+	case "--input":
+		switch val {
+		case "auto", "json", "table":
+			o.input = val
+		default:
+			return fmt.Errorf("invalid input format: %q (want auto, json, or table)", val)
+		}
 	case "--null-input":
 		o.nullInput = true
+	case "--raw-input":
+		o.rawInput = true
+	case "--exit-status":
+		o.exitStatus = true
+	case "--from-file":
+		o.fromFile = true
+	case "--args", "--jsonargs":
 	case "--slurp":
 		o.slurp = true
 	case "--expand":
@@ -217,15 +298,27 @@ func (o *options) long(name, val string, take taker) error {
 		if err != nil {
 			return err
 		}
+		if _, exists := o.named[vals[0]]; exists {
+			return nil
+		}
 		var v any = vals[1]
 		if name == "--argjson" {
 			if v, err = parseJSON(vals[1]); err != nil {
 				return fmt.Errorf("--argjson %s: invalid JSON: %v", vals[0], err)
 			}
 		}
-		o.names = append(o.names, "$"+vals[0])
-		o.values = append(o.values, v)
 		o.named[vals[0]] = v
+		// ARGS belongs to the caller. Other names are variables only when
+		// gojq parses them as a single variable, without operators or suffixes.
+		if name := "$" + vals[0]; vals[0] != "ARGS" {
+			q, err := gojq.Parse(name)
+			if err == nil && !strings.Contains(name, "::") &&
+				q.Term != nil && q.Term.Type == gojq.TermTypeFunc &&
+				q.Term.Func.Name == name && len(q.Term.SuffixList) == 0 {
+				o.names = append(o.names, name)
+				o.values = append(o.values, v)
+			}
+		}
 	default:
 		return fmt.Errorf("unknown option: %s", name)
 	}
@@ -238,6 +331,10 @@ func (o *options) short(c byte, rest string, take taker) error {
 	switch c {
 	case 'n':
 		o.nullInput = true
+	case 'R':
+		o.rawInput = true
+	case 'e':
+		o.exitStatus = true
 	case 's':
 		o.slurp = true
 	case 'x':
@@ -251,7 +348,7 @@ func (o *options) short(c byte, rest string, take taker) error {
 	case 'r':
 	case 'h':
 		o.help = true
-	case 'w', 'o', 'S':
+	case 'w', 'o', 'S', 'f':
 		if rest == "" {
 			vals, err := take("-"+string(c), 1)
 			if err != nil {
@@ -260,6 +357,8 @@ func (o *options) short(c byte, rest string, take taker) error {
 			rest = vals[0]
 		}
 		switch c {
+		case 'f':
+			o.fromFile = true
 		case 'o':
 			o.output = rest
 		case 'S':

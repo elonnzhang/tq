@@ -1,6 +1,6 @@
 # tq
 
-tq is jq for people. It runs a jq filter on JSON and draws the results as tables instead of printing JSON. Its sibling `tqmd` draws them as a Markdown document.
+tq is jq for people. It runs a jq filter on JSON or a text table and draws the results as tables instead of printing JSON. Its sibling `tqmd` draws them as a Markdown document.
 
 ```console
 $ herdr agent list | tq '.result.agents[] | {pane_id, agent, status: .agent_status, cwd}'
@@ -83,6 +83,23 @@ $ tq -w 44 '.result.agents[:2] | map({pane_id, agent, agent_status, cwd, focused
 │ focused      │ true              │
 ╰──────────────┴───────────────────╯
 ```
+
+## Text tables
+
+Commands that print whitespace-separated tables can be piped straight into tq:
+
+```sh
+rex hosts list | tq
+herdr machine list | tq
+rex hosts list | tq '.[] | {LABEL, SOURCE}'
+herdr machine list | tq 'map(.[1])'
+```
+
+An uppercase header such as `LABEL ENDPOINTS SOURCE` becomes the keys of object rows, in header order. Without a header, each row becomes an array, addressed by index. Fields stay strings, so IDs keep their leading zeros. Blank lines are skipped, ANSI styling is removed, and rows must have the same number of columns. In headed tables, tabs or two or more spaces separate columns when every row fits; otherwise, fields split on whitespace.
+
+Automatic detection requires at least three fields in the first nonempty line and a first field that is not JSON. Use `--input table` for ambiguous tables, including two columns or numeric IDs, and `--input json` to disable detection. `-R` reads lines as strings and takes precedence over `--input`. With `-Rs`, the whole input is one string, including its line breaks.
+
+Text tables work with the viewer, Markdown output, width limits and sorting just like JSON arrays.
 
 ## Markdown
 
@@ -175,13 +192,18 @@ $ echo '{"data":[{"id":"b","n":"10"},{"id":"a","n":9},{"id":"c"}]}' | tq -S -.da
 | `-o table`, `-o md`            | output format; tq defaults to `table`, tqmd to `md`             |
 | `-i`, `--no-interactive`       | show the output in the viewer, or write it                      |
 | `-n`                           | use `null` as the only input                                    |
+| `--input auto/json/table`       | detect text tables, require JSON, or require a text table        |
+| `-R`                           | read each input line as a string; `-Rs` reads one whole string    |
 | `-s`                           | read all inputs into one array and run the filter on it once    |
+| `-e`                           | exit 1 for a final `false` or `null`, 4 for no results           |
+| `-f FILE`                      | read the filter from a file                                    |
 | `-x`                           | draw nested values in table rows as tables                      |
 | `-w N`                         | keep lines at most N characters wide; 0 means no limit          |
 | `-S PATH`                      | sort, as above; repeat it to break ties                         |
 | `--style ascii`                | draw borders with `+-\|` instead of rounded box lines           |
 | `-C`, `-M`                     | turn colors on or off                                           |
 | `--arg NAME VALUE`, `--argjson NAME JSON` | set `$NAME`, as in jq                                |
+| `--args`, `--jsonargs`          | put subsequent positional arguments in `$ARGS.positional`      |
 
 Colors are on by default on a terminal, unless `NO_COLOR` is set or `TERM` is `dumb`. Short flags combine as in jq, so `-sS .n` and `-w80` both work. `tq --help` gives the details.
 
@@ -190,11 +212,19 @@ Colors are on by default on a terminal, unless `NO_COLOR` is set or `TERM` is `d
 - Output is always drawn, never JSON. `-r` is accepted but does nothing, since strings are never quoted.
 - `-S` means `--sort`, not jq's `--sort-keys`.
 - All the results of a run are drawn together, as one array.
-- Exit codes are jq's:
-  - 2 for usage, file and JSON errors;
+- Text tables are detected automatically unless `--input json` or `-R` is given.
+- gojq preserves large integer arithmetic rather than rounding it to floating point. Its JSON parser rejects jq's extensions such as `+1`, `.5` and `NaN`, and replaces unpaired Unicode surrogates with `�`. Error messages, including strings returned by `catch`, can differ.
+- `keys_unsorted` and `to_entries` keep recorded input key order. For objects constructed by a filter, keys follow tq's display order.
+- Regex functions support lookaround, backreferences and flags `g`, `i`, `m`, `s`, `p`, `x`, `n`. Longest-match flag `l` is unsupported. Backtracking is limited to 250 ms per match operation.
+- Other jq options, including `--stream` and `--sort-keys`, are unsupported.
+- Exit codes follow jq:
+  - 2 for usage and file errors;
   - 3 when the filter doesn't compile;
-  - 5 when it fails on some input;
+  - 5 for JSON parse errors or an error on the last input processed;
+  - with `-e`, 1 for a final `false` or `null`, 4 for no results;
   - the code `halt_error` asks for.
+
+A JSON parse error stops the input. A runtime error reports the failure and continues with the next input, whose success can restore exit code 0. Missing files are skipped but still produce exit code 2. Repeated named arguments keep their first binding, as in jq.
 
 ## Development
 

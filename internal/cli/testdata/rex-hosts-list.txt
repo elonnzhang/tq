@@ -1,0 +1,5 @@
+LABEL            ENDPOINTS                                          SOURCE
+elon-macbook-m4  https://macbook-m4-rex.ts.net  stored
+Herdr            127.0.0.1:7420                                     stored
+herdrex-report   http://127.0.0.1:7419                              stored
+dev              http://127.0.0.1:7388                              stored
